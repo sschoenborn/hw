@@ -1235,7 +1235,7 @@ end;
 function lc_setclancolor(L : Plua_State) : LongInt; Cdecl;
 var clan : PClan;
     team : PTeam;
-    hh   : THedgehog;
+    hh   : PHedgehog;
     i, j : LongInt;
 begin
     if CheckLuaParamCount(L, 2, 'SetClanColor', 'clan, color') then
@@ -1250,12 +1250,12 @@ begin
             team:= clan^.Teams[i];
             for j:= 0 to 7 do
                 begin
-                hh:= team^.Hedgehogs[j];
-                if (hh.Gear <> nil) or (hh.GearHidden <> nil) then
+                hh:= @(team^.Hedgehogs[j]);
+                if (hh^.Gear <> nil) or (hh^.GearHidden <> nil) then
                     begin
-                    FreeAndNilTexture(hh.NameTagTex);
-                    hh.NameTagTex:= RenderStringTex(ansistring(hh.Name), clan^.Color, fnt16);
-                    RenderHealth(hh);
+                    FreeAndNilTexture(hh^.NameTagTex);
+                    hh^.NameTagTex:= RenderStringTex(ansistring(hh^.Name), clan^.Color, fnt16);
+                    RenderHealth(hh^);
                     end;
                 end;
             FreeAndNilTexture(team^.NameTagTex);

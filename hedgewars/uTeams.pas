@@ -20,8 +20,8 @@
 
 unit uTeams;
 interface
-uses uConsts, uInputHandler, uRandom, uFloat, uStats,
-     uCollisions, uSound, uStore, uTypes, uScript
+uses sysutils, uConsts, uInputHandler, uRandom, uFloat, uStats,
+     uCollisions, uSound, uStore, uTypes, uScript, uRenderUtils
      {$IFDEF USE_TOUCH_INTERFACE}, uWorld{$ENDIF};
 
 
@@ -34,6 +34,7 @@ procedure AfterSwitchHedgehog;
 procedure InitTeams;
 function  TeamSize(p: PTeam): Longword;
 procedure RecountTeamHealth(team: PTeam);
+procedure RecountClanHealth(clan: PClan);
 procedure RecountAllTeamsHealth();
 procedure RestoreHog(HH: PHedgehog);
 
@@ -41,6 +42,12 @@ procedure RestoreTeamsFromSave;
 function  CheckForWin: boolean;
 procedure TeamGoneEffect(var Team: TTeam);
 procedure SwitchCurrentHedgehog(newHog: PHedgehog);
+
+procedure SwitchClan(p: PTeam; c: PClan);
+function GetClanColor(i: Integer): LongInt;
+procedure SplitClans;
+procedure UpdateClanVisuals(clan: PClan);
+function AddEmptyClan(color: LongInt): PClan;
 
 var MaxTeamHealth: LongInt;
 
@@ -51,6 +58,173 @@ uses uLocale, uAmmos, uChat, uVariables, uUtils, uIO, uCaptions, uCommands, uDeb
 
 var GameOver: boolean;
     NextClan: boolean;
+
+
+function FindTeamIndex(p: PTeam): Integer;
+var
+  i: LongInt;
+begin
+  FindTeamIndex:=-1;
+  for i:=0 to Pred(cMaxTeams) do
+        if (TeamsArray[i] = p) then
+          begin
+            FindTeamIndex := i;
+          end;
+end;
+
+procedure SwitchClan(p: PTeam; c: PClan);
+var oldClan: PClan;
+    found: Boolean;
+    i: LongInt;
+begin
+  if (p = nil) or (c = nil) then
+  begin
+    AddFileLog('call to SwitchClan with null pointers');
+    exit;
+  end;
+
+  (* already in desired clan *)
+  if p^.Clan = c then exit;
+
+  AddFileLog('changing team ' + p^.TeamName + ' to clan with color=' + IntToStr(c^.Color));
+
+  oldClan := p^.Clan;
+  p^.Clan := c;
+
+  (* add team to new clan *)
+  with p^.Clan^ do
+  begin
+    Teams[TeamsNumber]:=p;
+    inc(TeamsNumber);
+  end;
+
+  (* remove team from old clan *)
+  with oldClan^ do
+  begin
+    found := false;
+    for i := 0 to Pred(TeamsNumber) - 1 do
+    begin
+      if found or (Teams[i] = p) then
+      begin
+        Teams[i] := Teams[i + 1];
+        found := true;
+      end;
+    end;
+    dec(TeamsNumber);
+  end;
+
+  RecountAllTeamsHealth;
+  UpdateClanVisuals(c);
+
+  //InitTeams;
+
+  SpawnClansArray := ClansArray;
+end;
+
+function AddEmptyClan(color: LongInt): PClan;
+var clan: PClan;
+begin
+  (* add clan to data structure *)
+  AddFileLog('adding new empty clan with color=' + IntToStr(color));
+  new(clan);
+  FillChar(clan^, sizeof(TClan), 0);
+  ClansArray[ClansCount] := clan;
+  inc(ClansCount);
+
+  (* init clan *)
+  clan^.ClanIndex := Pred(ClansCount);
+  clan^.Color := Color;
+  clan^.TagTeamIndex := 0;
+  clan^.Flawless := true;
+  clan^.TurnNumber := 0;
+  clan^.HealthTex:= makeHealthBarTexture(cTeamHealthWidth + 5, TeamsArray[0]^.NameTagTex^.h, clan^.Color);
+
+  AddEmptyClan := clan;
+
+end;
+
+procedure UpdateClanVisuals(clan: PClan);
+var team : PTeam;
+    hh   : PHedgehog;
+    i, j : LongInt;
+begin
+  if clan = nil then exit;
+  if clan^.TeamsNumber = 0 then exit;
+
+  (* update all teams in clan *)
+  for i:= 0 to Pred(clan^.TeamsNumber) do
+  begin
+    team:= clan^.Teams[i];
+    AddFileLog('updating in clan color=' + IntToStr(clan^.Color) + ' team: ' + team^.TeamName);
+    for j:= 0 to Pred(cMaxHHIndex) do
+    begin
+      hh:= @(team^.Hedgehogs[j]);
+      if (hh^.Gear <> nil) or (hh^.GearHidden <> nil) then
+      begin
+        AddFileLog('updating hh with name "' + hh^.Name + '" with health=' + IntToStr(hh^.Gear^.Health));
+        FreeAndNilTexture(hh^.NameTagTex);
+        hh^.NameTagTex := RenderStringTex(ansistring(hh^.Name), clan^.Color, fnt16);
+        FreeAndNilTexture(hh^.HealthTagTex);
+        hh^.HealthTagTex := RenderStringTex(ansistring(IntToStr(hh^.Gear^.Health)), clan^.Color, fnt16);
+      end;
+    end;
+    FreeAndNilTexture(team^.NameTagTex);
+    team^.NameTagTex:= RenderStringTex(ansistring(team^.TeamName), clan^.Color, fnt16);
+  end;
+
+  (* init texture of clan *)
+  FreeAndNilTexture(clan^.HealthTex);
+  clan^.HealthTex:= makeHealthBarTexture(cTeamHealthWidth + 5, clan^.Teams[0]^.NameTagTex^.h, clan^.Color);
+
+end;
+
+procedure SplitClans;
+{split all clans into individual teams (one clan per team)}
+var 
+clan: PClan;
+i: LongInt;
+NewClan: PClan;
+ClanColor: LongInt;
+team: PTeam;
+begin
+  if (TeamsCount < 2) or ((GameFlags and gfOneClanMode) <> 0) then exit;
+  (* split clans with more than a single team *)
+  for i := 0 to Pred(ClansCount) do
+  begin
+    clan := ClansArray[i];
+    (* add new clan for each additional team *)
+    while clan^.TeamsNumber > 1 do
+    begin
+      (* next clan color *)
+      ClanColor := GetClanColor(ClansCount);
+      (* add a new clan *)
+      NewClan := AddEmptyClan(ClanColor);
+      (* move last team in this clan to new clan *)
+      team := clan^.Teams[Pred(clan^.TeamsNumber)];
+      SwitchClan(team, NewClan);
+    end;
+  end;
+end;
+
+function GetClanColor(i: Integer): LongInt;
+const
+    ClanColors: array[0..11] of LongInt = ($ffa6cee3,
+      $ff1f78b4, 
+      $ffb2df8a, 
+      $ff33a02c, 
+      $fffb9a99, 
+      $ffe31a1c, 
+      $fffdbf6f,
+      $ffff7f00, 
+      $ffcab2d6, 
+      $ff6a3d9a, 
+      $ffffff99, 
+      $ffb15928);
+begin
+  GetClanColor := $ffffffff;
+  if (i >= 0) and (i < 12) then
+    GetClanColor := ClanColors[i];
+end;
 
 function CheckForWin: boolean;
 var AliveClan: PClan;
@@ -65,6 +239,9 @@ for t:= 0 to Pred(ClansCount) do
         inc(AliveCount);
         AliveClan:= ClansArray[t]
         end;
+
+if (TeamsCount > 1) and (AliveCount = 1) and ((GameFlags and gfOneClanMode) = 0) then
+    SplitClans;
 
 if (AliveCount > 1) or ((AliveCount = 1) and ((GameFlags and gfOneClanMode) <> 0)) then
     exit;
@@ -824,6 +1001,46 @@ begin
     CurrentTeam^.Owner:= s
 end;
 
+procedure chChangeTeamColor(var s: shortstring);
+var Color: Longword;
+clan: PClan;
+i: LongInt;
+cs, ts: shortstring;
+begin
+  if CurrentTeam = nil then
+    exit;
+
+  AddFileLog('ChangeTeamColor called: s="' + s + '"');
+
+  Color:= StrToInt(s);
+
+  Color:= Color or $FF000000;
+  AddFileLog('ChangeTeamColor color=' + IntToHex(color, 8));
+                                                     
+  (* find matching clan *)
+  clan := nil;
+  for i := 0 to Pred(ClansCount) do
+  begin
+    if ClansArray[i]^.Color = Color then
+      clan := ClansArray[i];
+  end;
+
+  (* no clan with this color yet, create a new one *)
+  if clan = nil then
+    clan := AddEmptyClan(Color);
+
+  AddFileLog('Team ' + CurrentTeam^.TeamName + ' changes sides to clan with color ' + IntToHex(Color, 8));
+
+  (* switch clan *)
+  SwitchClan(CurrentTeam, clan);
+
+end;
+
+procedure chSplitClans(var s: shortstring);
+begin
+  SplitClans;
+end;
+
 procedure initModule;
 begin
 RegisterVariable('addhh', @chAddHH, false);
@@ -838,6 +1055,9 @@ RegisterVariable('grave'   , @chGrave        , false);
 RegisterVariable('hat'     , @chSetHat       , false);
 RegisterVariable('flag'    , @chFlag         , false);
 RegisterVariable('owner'   , @chOwner        , false);
+
+RegisterVariable('teamcolor'   , @chChangeTeamColor        , false);
+RegisterVariable('splitclans'   , @chSplitClans        , false);
 
 CurrentTeam:= nil;
 PreviousTeam:= nil;
