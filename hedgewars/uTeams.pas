@@ -241,7 +241,16 @@ for t:= 0 to Pred(ClansCount) do
         end;
 
 if (TeamsCount > 1) and (AliveCount = 1) and ((GameFlags and gfOneClanMode) = 0) then
+  begin
     SplitClans;
+    AliveCount:= 0;
+    for t:= 0 to Pred(ClansCount) do
+      if ClansArray[t]^.ClanHealth > 0 then
+      begin
+        inc(AliveCount);
+        AliveClan:= ClansArray[t]
+      end;
+  end;
 
 if (AliveCount > 1) or ((AliveCount = 1) and ((GameFlags and gfOneClanMode) <> 0)) then
     exit;
