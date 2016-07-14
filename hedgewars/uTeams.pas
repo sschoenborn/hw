@@ -204,6 +204,14 @@ begin
       SwitchClan(team, NewClan);
     end;
   end;
+
+  for i := 0 to Pred(ClansCount) do
+  begin
+    clan := ClansArray[i];
+    clan^.Color := GetClanColor(i);
+    UpdateClanVisuals(clan);
+  end;
+
 end;
 
 function GetClanColor(i: Integer): LongInt;
